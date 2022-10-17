@@ -1,12 +1,6 @@
 /* XMRig
- * Copyright 2010      Jeff Garzik <jgarzik@pobox.com>
- * Copyright 2012-2014 pooler      <pooler@litecoinpool.org>
- * Copyright 2014      Lucas Jones <https://github.com/lucasjones>
- * Copyright 2014-2016 Wolf9466    <https://github.com/OhGodAPet>
- * Copyright 2016      Jay D Dee   <jayddee246@gmail.com>
- * Copyright 2017-2018 XMR-Stak    <https://github.com/fireice-uk>, <https://github.com/psychocrypt>
- * Copyright 2018-2020 SChernykh   <https://github.com/SChernykh>
- * Copyright 2016-2020 XMRig       <https://github.com/xmrig>, <support@xmrig.com>
+ * Copyright (c) 2018-2021 SChernykh   <https://github.com/SChernykh>
+ * Copyright (c) 2016-2021 XMRig       <https://github.com/xmrig>, <support@xmrig.com>
  *
  *   This program is free software: you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -21,7 +15,6 @@
  *   You should have received a copy of the GNU General Public License
  *   along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
-
 
 #include "backend/cpu/CpuConfig.h"
 #include "3rdparty/rapidjson/document.h"
@@ -52,15 +45,10 @@ const char *CpuConfig::kAsm                 = "asm";
 const char *CpuConfig::kArgon2Impl          = "argon2-impl";
 #endif
 
-#ifdef XMRIG_ALGO_ASTROBWT
-const char *CpuConfig::kAstroBWTMaxSize     = "astrobwt-max-size";
-const char *CpuConfig::kAstroBWTAVX2        = "astrobwt-avx2";
-#endif
-
 
 extern template class Threads<CpuThreads>;
 
-}
+} // namespace xmrig
 
 
 bool xmrig::CpuConfig::isHwAES() const
@@ -77,7 +65,7 @@ rapidjson::Value xmrig::CpuConfig::toJSON(rapidjson::Document &doc) const
     Value obj(kObjectType);
 
     obj.AddMember(StringRef(kEnabled),      m_enabled, allocator);
-    obj.AddMember(StringRef(kHugePages),    m_hugePages, allocator);
+    obj.AddMember(StringRef(kHugePages),    m_hugePageSize == 0 || m_hugePageSize == kDefaultHugePageSizeKb ? Value(isHugePages()) : Value(static_cast<uint32_t>(m_hugePageSize)), allocator);
     obj.AddMember(StringRef(kHugePagesJit), m_hugePagesJit, allocator);
     obj.AddMember(StringRef(kHwAes),        m_aes == AES_AUTO ? Value(kNullType) : Value(m_aes == AES_HW), allocator);
     obj.AddMember(StringRef(kPriority),     priority() != -1 ? Value(priority()) : Value(kNullType), allocator);
@@ -96,11 +84,6 @@ rapidjson::Value xmrig::CpuConfig::toJSON(rapidjson::Document &doc) const
     obj.AddMember(StringRef(kArgon2Impl), m_argon2Impl.toJSON(), allocator);
 #   endif
 
-#   ifdef XMRIG_ALGO_ASTROBWT
-    obj.AddMember(StringRef(kAstroBWTMaxSize),  m_astrobwtMaxSize, allocator);
-    obj.AddMember(StringRef(kAstroBWTAVX2),     m_astrobwtAVX2, allocator);
-#   endif
-
     m_threads.toJSON(obj, doc);
 
     return obj;
@@ -109,12 +92,16 @@ rapidjson::Value xmrig::CpuConfig::toJSON(rapidjson::Document &doc) const
 
 size_t xmrig::CpuConfig::memPoolSize() const
 {
-    return m_memoryPool < 0 ? Cpu::info()->threads() : m_memoryPool;
+    return m_memoryPool < 0 ? std::max(Cpu::info()->threads(), Cpu::info()->L3() >> 21) : m_memoryPool;
 }
 
 
 std::vector<xmrig::CpuLaunchData> xmrig::CpuConfig::get(const Miner *miner, const Algorithm &algorithm) const
 {
+    if (algorithm.family() == Algorithm::KAWPOW) {
+        return {};
+    }
+
     std::vector<CpuLaunchData> out;
     const auto &threads = m_threads.get(algorithm);
 
@@ -125,8 +112,15 @@ std::vector<xmrig::CpuLaunchData> xmrig::CpuConfig::get(const Miner *miner, cons
     const size_t count = threads.count();
     out.reserve(count);
 
+    std::vector<int64_t> affinities;
+    affinities.reserve(count);
+
+    for (const auto& thread : threads.data()) {
+        affinities.emplace_back(thread.affinity());
+    }
+
     for (const auto &thread : threads.data()) {
-        out.emplace_back(miner, algorithm, *this, thread, count);
+        out.emplace_back(miner, algorithm, *this, thread, count, affinities);
     }
 
     return out;
@@ -137,14 +131,14 @@ void xmrig::CpuConfig::read(const rapidjson::Value &value)
 {
     if (value.IsObject()) {
         m_enabled      = Json::getBool(value, kEnabled, m_enabled);
-        m_hugePages    = Json::getBool(value, kHugePages, m_hugePages);
         m_hugePagesJit = Json::getBool(value, kHugePagesJit, m_hugePagesJit);
         m_limit        = Json::getUint(value, kMaxThreadsHint, m_limit);
         m_yield        = Json::getBool(value, kYield, m_yield);
 
         setAesMode(Json::getValue(value, kHwAes));
-        setPriority(Json::getInt(value,  kPriority, -1));
+        setHugePages(Json::getValue(value, kHugePages));
         setMemoryPool(Json::getValue(value, kMemoryPool));
+        setPriority(Json::getInt(value,  kPriority, -1));
 
 #       ifdef XMRIG_FEATURE_ASM
         m_assembly = Json::getValue(value, kAsm);
@@ -152,24 +146,6 @@ void xmrig::CpuConfig::read(const rapidjson::Value &value)
 
 #       ifdef XMRIG_ALGO_ARGON2
         m_argon2Impl = Json::getString(value, kArgon2Impl);
-#       endif
-
-#       ifdef XMRIG_ALGO_ASTROBWT
-        const auto& astroBWTMaxSize = Json::getValue(value, kAstroBWTMaxSize);
-        if (astroBWTMaxSize.IsNull() || !astroBWTMaxSize.IsInt()) {
-            m_shouldSave = true;
-        }
-        else {
-            m_astrobwtMaxSize = std::min(std::max(astroBWTMaxSize.GetInt(), 400), 1200);
-        }
-
-        const auto& astroBWTAVX2 = Json::getValue(value, kAstroBWTAVX2);
-        if (astroBWTAVX2.IsNull() || !astroBWTAVX2.IsBool()) {
-            m_shouldSave = true;
-        }
-        else {
-            m_astrobwtAVX2 = astroBWTAVX2.GetBool();
-        }
 #       endif
 
         m_threads.read(value);
@@ -199,9 +175,10 @@ void xmrig::CpuConfig::generate()
     count += xmrig::generate<Algorithm::CN_LITE>(m_threads, m_limit);
     count += xmrig::generate<Algorithm::CN_HEAVY>(m_threads, m_limit);
     count += xmrig::generate<Algorithm::CN_PICO>(m_threads, m_limit);
+    count += xmrig::generate<Algorithm::CN_FEMTO>(m_threads, m_limit);
     count += xmrig::generate<Algorithm::RANDOM_X>(m_threads, m_limit);
     count += xmrig::generate<Algorithm::ARGON2>(m_threads, m_limit);
-    count += xmrig::generate<Algorithm::ASTROBWT>(m_threads, m_limit);
+    count += xmrig::generate<Algorithm::GHOSTRIDER>(m_threads, m_limit);
 
     m_shouldSave |= count > 0;
 }
@@ -214,6 +191,19 @@ void xmrig::CpuConfig::setAesMode(const rapidjson::Value &value)
     }
     else {
         m_aes = AES_AUTO;
+    }
+}
+
+
+void xmrig::CpuConfig::setHugePages(const rapidjson::Value &value)
+{
+    if (value.IsBool()) {
+        m_hugePageSize = value.GetBool() ? kDefaultHugePageSizeKb : 0U;
+    }
+    else if (value.IsUint()) {
+        const uint32_t size = value.GetUint();
+
+        m_hugePageSize = size < kOneGbPageSizeKb ? size : kDefaultHugePageSizeKb;
     }
 }
 

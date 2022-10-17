@@ -1,6 +1,6 @@
 /* XMRig
- * Copyright (c) 2018-2020 SChernykh   <https://github.com/SChernykh>
- * Copyright (c) 2016-2020 XMRig       <https://github.com/xmrig>, <support@xmrig.com>
+ * Copyright (c) 2018-2021 SChernykh   <https://github.com/SChernykh>
+ * Copyright (c) 2016-2021 XMRig       <https://github.com/xmrig>, <support@xmrig.com>
  *
  *   This program is free software: you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -37,8 +37,10 @@ public:
     static const char *kId;
     static const char *kSeed;
     static const char *kSize;
+    static const char* kRotation;
     static const char *kSubmit;
     static const char *kToken;
+    static const char *kUser;
     static const char *kVerify;
 
 #   ifndef XMRIG_DEBUG_BENCHMARK_API
@@ -49,17 +51,20 @@ public:
     static constexpr const uint16_t kApiPort    = 18805;
 #   endif
 
-    BenchConfig(uint32_t size, const String &id, const rapidjson::Value &object);
+    BenchConfig(uint32_t size, const String &id, const rapidjson::Value &object, bool dmi, uint32_t rotation);
 
-    static BenchConfig *create(const rapidjson::Value &object);
+    static BenchConfig *create(const rapidjson::Value &object, bool dmi);
 
+    inline bool isDMI() const                   { return m_dmi; }
     inline bool isSubmit() const                { return m_submit; }
     inline const Algorithm &algorithm() const   { return m_algorithm; }
     inline const String &id() const             { return m_id; }
     inline const String &seed() const           { return m_seed; }
     inline const String &token() const          { return m_token; }
+    inline const String &user() const           { return m_user; }
     inline uint32_t size() const                { return m_size; }
     inline uint64_t hash() const                { return m_hash; }
+    inline uint32_t rotation() const            { return m_rotation; }
 
     rapidjson::Value toJSON(rapidjson::Document &doc) const;
 
@@ -67,12 +72,15 @@ private:
     static uint32_t getSize(const char *benchmark);
 
     Algorithm m_algorithm;
+    bool m_dmi;
     bool m_submit;
     String m_id;
     String m_seed;
     String m_token;
+    String m_user;
     uint32_t m_size;
-    uint64_t m_hash;
+    uint32_t m_rotation;
+    uint64_t m_hash = 0;
 };
 
 

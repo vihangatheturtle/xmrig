@@ -42,13 +42,13 @@ if (WITH_RANDOMX)
         src/crypto/rx/RxVm.cpp
     )
 
-    if (CMAKE_C_COMPILER_ID MATCHES MSVC)
+    if (WITH_ASM AND CMAKE_C_COMPILER_ID MATCHES MSVC)
         enable_language(ASM_MASM)
         list(APPEND SOURCES_CRYPTO
              src/crypto/randomx/jit_compiler_x86_static.asm
              src/crypto/randomx/jit_compiler_x86.cpp
             )
-    elseif (NOT XMRIG_ARM AND CMAKE_SIZEOF_VOID_P EQUAL 8)
+    elseif (WITH_ASM AND NOT XMRIG_ARM AND CMAKE_SIZEOF_VOID_P EQUAL 8)
         list(APPEND SOURCES_CRYPTO
              src/crypto/randomx/jit_compiler_x86_static.S
              src/crypto/randomx/jit_compiler_x86.cpp
@@ -100,13 +100,29 @@ if (WITH_RANDOMX)
         message("-- WITH_MSR=ON")
 
         if (XMRIG_OS_WIN)
-            list(APPEND SOURCES_CRYPTO src/crypto/rx/Rx_win.cpp)
+            list(APPEND SOURCES_CRYPTO
+                src/crypto/rx/RxFix_win.cpp
+                src/hw/msr/Msr_win.cpp
+                )
         elseif (XMRIG_OS_LINUX)
-            list(APPEND SOURCES_CRYPTO src/crypto/rx/Rx_linux.cpp)
+            list(APPEND SOURCES_CRYPTO
+                src/crypto/rx/RxFix_linux.cpp
+                src/hw/msr/Msr_linux.cpp
+                )
         endif()
 
-        list(APPEND HEADERS_CRYPTO src/crypto/rx/msr/MsrItem.h)
-        list(APPEND SOURCES_CRYPTO src/crypto/rx/msr/MsrItem.cpp)
+        list(APPEND HEADERS_CRYPTO
+            src/crypto/rx/RxFix.h
+            src/crypto/rx/RxMsr.h
+            src/hw/msr/Msr.h
+            src/hw/msr/MsrItem.h
+            )
+
+        list(APPEND SOURCES_CRYPTO
+            src/crypto/rx/RxMsr.cpp
+            src/hw/msr/Msr.cpp
+            src/hw/msr/MsrItem.cpp
+            )
     else()
         remove_definitions(/DXMRIG_FEATURE_MSR)
         remove_definitions(/DXMRIG_FIX_RYZEN)
